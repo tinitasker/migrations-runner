@@ -1,0 +1,10 @@
+.git
+.gitignore
+.github
+.idea
+.DS_Store
+.env
+README.md
+Makefile
+migration-bundle
+tests

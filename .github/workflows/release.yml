@@ -1,0 +1,222 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.version.outputs.image }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out release commit and tags
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate stable release and version
+        id: version
+        env:
+          IS_DRAFT: ${{ github.event.release.draft }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$IS_DRAFT" == 'true' || "$IS_PRERELEASE" == 'true' ]]; then
+            echo '::error title=Invalid release::Only a published, non-draft, non-prerelease release may publish the runner image.'
+            exit 1
+          fi
+
+          tag="$RELEASE_TAG"
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error title=Invalid release tag::Expected vX.Y.Z without prerelease labels or leading zeroes, received '$tag'."
+            exit 1
+          fi
+
+          tag_commit="$(git rev-list -n 1 "$tag")"
+          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo '::error title=Invalid release commit::The release tag does not resolve to the workflow commit.'
+            exit 1
+          fi
+
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main; then
+            echo '::error title=Invalid release commit::The release commit must belong to main.'
+            exit 1
+          fi
+
+          version="${tag#v}"
+          latest_version="$({
+            git tag --list 'v*.*.*' |
+              sed -En 's/^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$/\1/p' |
+              awk -v current="$version" '$0 != current' |
+              sort -V |
+              tail -n 1
+          } || true)"
+
+          if [[ -n "$latest_version" ]] && dpkg --compare-versions "$version" le "$latest_version"; then
+            echo "::error title=Version is not newer::Version $version must be greater than the latest stable tag, $latest_version."
+            exit 1
+          fi
+
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Reject existing immutable package tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER_TYPE: ${{ github.event.repository.owner.type }}
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$OWNER_TYPE" in
+            Organization) package_scope=orgs ;;
+            User) package_scope=users ;;
+            *)
+              echo "::error title=Version check failed::Unsupported repository owner type '$OWNER_TYPE'."
+              exit 1
+              ;;
+          esac
+
+          owner="$GITHUB_REPOSITORY_OWNER"
+          package="${GITHUB_REPOSITORY#*/}"
+          error_file="$RUNNER_TEMP/ghcr-version-check-error"
+
+          set +e
+          published_tags="$(
+            gh api --paginate "/$package_scope/$owner/packages/container/$package/versions" \
+              --jq '.[].metadata.container.tags[]' 2>"$error_file"
+          )"
+          status=$?
+          set -e
+
+          if [[ $status -ne 0 ]]; then
+            if grep -q 'HTTP 404' "$error_file"; then
+              echo 'No existing migrations-runner package was found.'
+              exit 0
+            fi
+            echo '::error title=Version check failed::Unable to read existing GHCR package versions.'
+            sed -n '1,20p' "$error_file"
+            exit 1
+          fi
+
+          for immutable_tag in "v$VERSION" "$VERSION" "sha-$GITHUB_SHA"; do
+            if grep -Fxq "$immutable_tag" <<< "$published_tags"; then
+              echo "::error title=Existing image version::The immutable package tag '$immutable_tag' already exists."
+              exit 1
+            fi
+          done
+
+  sast-scan:
+    name: SAST scan
+    needs: validate
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Scan source, dependencies, secrets, and configuration
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: 'false'
+          format: table
+          exit-code: '1'
+          timeout: 15m
+
+  test:
+    name: Test
+    needs: sast-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Validate shell sources
+        run: shellcheck scripts/*.sh tests/*.sh
+
+      - name: Run portable test suite
+        run: make test
+
+      - name: Run PostgreSQL 18 integration suite
+        run: make integration-test
+
+  publish:
+    name: Build and publish runner image
+    needs:
+      - validate
+      - test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Build and publish immutable runner image
+        id: image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ needs.validate.outputs.image }}:v${{ needs.validate.outputs.version }}
+            ${{ needs.validate.outputs.image }}:${{ needs.validate.outputs.version }}
+            ${{ needs.validate.outputs.image }}:sha-${{ github.sha }}
+            ${{ needs.validate.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+
+      - name: Record immutable image reference
+        env:
+          IMAGE: ${{ needs.validate.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo '::error title=Invalid image digest::The published image did not produce a sha256 digest.'
+            exit 1
+          fi
+          # The backticks are intentional Markdown delimiters.
+          # shellcheck disable=SC2016
+          printf 'Use `%s@%s` in service workflow configuration.\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
