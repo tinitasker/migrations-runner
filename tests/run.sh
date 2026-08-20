@@ -135,6 +135,7 @@ chmod 0755 "$fake_bin/psql"
 run_bundle() {
   bundle=$1
   output=$2
+  port=${3:-25060}
   PATH="$fake_bin:$PATH" \
   FAKE_PSQL_LOG="$temporary_directory/psql.log" \
   FAKE_PSQL_STATE="$temporary_directory/psql.state" \
@@ -145,7 +146,7 @@ run_bundle() {
   ASPNETCORE_ENVIRONMENT=Staging \
   MIGRATION_COMMIT_SHA=0123456789abcdef0123456789abcdef01234567 \
   PGHOST=database.internal \
-  PGPORT=25060 \
+  PGPORT="$port" \
   PGDATABASE=defaultdb \
   PGUSER=migrations \
   PGPASSWORD=not-a-real-secret \
@@ -243,6 +244,14 @@ valid_bundle="$temporary_directory/valid"
 make_bundle "$valid_bundle"
 "$validator" "$valid_bundle"
 pass 'accepts the exact validated bundle layout'
+
+if run_bundle "$valid_bundle" "$temporary_directory/oversized-port.log" \
+  999999999999999999999999999999999999999999; then
+  fail_test 'runner accepted a numeric PGPORT outside the shell integer range'
+fi
+assert_contains "$temporary_directory/oversized-port.log" \
+  'PGPORT must be between 1 and 65535'
+pass 'rejects PGPORT values outside the shell integer range'
 
 : > "$temporary_directory/psql.log"
 : > "$temporary_directory/psql.state"
