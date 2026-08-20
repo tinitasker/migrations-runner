@@ -91,8 +91,15 @@ done < "$migrations_directory/metadata.env"
 case "$PGPORT" in
   ''|*[!0-9]*) fail 'PGPORT must be numeric' ;;
 esac
-[ "$PGPORT" -ge 1 ] 2>/dev/null && [ "$PGPORT" -le 65535 ] 2>/dev/null \
-  || fail 'PGPORT must be between 1 and 65535'
+
+normalized_pgport=$(printf '%s\n' "$PGPORT" | sed 's/^0*//')
+[ -n "$normalized_pgport" ] || normalized_pgport=0
+case "$normalized_pgport" in
+  ??????*) fail 'PGPORT must be between 1 and 65535' ;;
+esac
+if [ "$normalized_pgport" -lt 1 ] || [ "$normalized_pgport" -gt 65535 ]; then
+  fail 'PGPORT must be between 1 and 65535'
+fi
 
 run_psql() {
   psql --no-psqlrc --quiet --set=ON_ERROR_STOP=1 --dbname="$PGDATABASE" "$@"
