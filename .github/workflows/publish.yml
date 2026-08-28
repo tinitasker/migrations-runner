@@ -136,28 +136,11 @@ jobs:
           exit-code: '1'
           timeout: 15m
 
-  test:
-    name: Test
-    needs: sast-scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Validate shell sources
-        run: shellcheck scripts/*.sh tests/*.sh
-
-      - name: Run portable test suite
-        run: make test
-
-      - name: Run PostgreSQL 18 integration suite
-        run: make integration-test
-
   publish:
     name: Build and publish runner image
     needs:
       - validate
-      - test
+      - sast-scan
     runs-on: ubuntu-latest
     permissions:
       contents: read

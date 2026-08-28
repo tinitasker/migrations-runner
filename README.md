@@ -1,33 +1,56 @@
-# TiniTasker migrations runner
+# TiniTasker Migrations Runner
 
-This project builds the universal PostgreSQL 18 migration image used to both
-package and execute service-owned migrations:
+This repository builds the universal PostgreSQL 18 migration image that
+packages and executes service-owned database migrations:
 
 ```text
 ghcr.io/tinitasker/migrations-runner@sha256:<digest>
 ```
 
-## Repository bootstrap
+Read the [organization engineering handbook](https://github.com/tinitasker/.github/blob/main/docs/README.md)
+for the platform architecture and required development flow.
 
-This folder must be initialized as its own Git repository and pushed to the
-`tinitasker/migrations-runner` GitHub repository before its verification and
-publishing workflows can run. The surrounding `tinitasker` workspace is not a Git
-repository and does not publish this project implicitly.
+## Purpose
 
-Create the empty organization repository first, then initialize and publish
-this folder from its root:
+The image provides one validated migration-bundle format and one safe
+execution path for the API, Identity, Messaging, and Storage services. Shared
+GitHub Actions use it during delivery, but service migrations continue to live
+in each owning repository's `db/` directory.
+
+## Business and security boundaries
+
+This repository owns migration packaging and execution mechanics, not product
+schema meaning or business rules. Preserve the service/schema allowlist,
+checksum verification, unprivileged container behavior, and immutable
+digest-pinning contract. The runner image must not contain application source,
+service migrations, or database credentials.
+
+## Technology
+
+- PostgreSQL 18 client tooling in a container image published to GHCR.
+- Portable shell packaging and validation scripts.
+- Docker or Podman for local builds and disposable integration tests.
+
+## Local development
 
 ```sh
-git init
-git branch -M main
-git remote add origin git@github.com:tinitasker/migrations-runner.git
-# Review, add, and commit the project files before publishing them.
-git push --set-upstream origin main
+make test
+make integration-test
+make build
 ```
 
-Do not publish the runner until `main` exists remotely and the verification
-workflow has passed. Repository creation, initialization, and the first push are
-deliberate one-time operator actions; Terraform does not perform them.
+## Repository bootstrap
+
+This folder is its own Git repository; the surrounding `tinitasker` workspace
+does not publish it implicitly. The existing `tinitasker/migrations-runner`
+repository is already initialized.
+
+For a new empty organization repository, create a seed default `main` branch
+during repository provisioning (for example, by creating it with an initial
+README). Apply the organization `main` ruleset immediately. Then use the
+standard [`feature/<short-meaningful-description>` draft-PR flow](https://github.com/tinitasker/.github/blob/main/docs/development-flow.md)
+for every code or configuration change. Do not push later work directly to
+`main`.
 
 GitHub-hosted workflow jobs use the image's `package-migrations` command to
 create a migration bundle, then upload that bundle as a GitHub Actions
@@ -164,12 +187,12 @@ COMMIT_SHA=0123456789abcdef0123456789abcdef01234567
 
 The supported service/schema pairs are:
 
-| Service | Schema |
-| --- | --- |
-| `api` | `public` |
-| `identity` | `identity` |
+| Service     | Schema      |
+|-------------|-------------|
+| `api`       | `public`    |
+| `identity`  | `identity`  |
 | `messaging` | `messaging` |
-| `storage` | `storage` |
+| `storage`   | `storage`   |
 
 Bundle metadata must match the job environment. This prevents a valid artifact
 for one service, environment, or commit from being used accidentally by
