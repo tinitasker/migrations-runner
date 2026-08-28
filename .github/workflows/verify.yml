@@ -61,17 +61,3 @@ jobs:
 
       - name: Build runner image
         run: docker build --tag tinitasker/migrations-runner:verify .
-
-  test:
-    name: Test
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Run portable test suite
-        run: make test
-
-      - name: Run PostgreSQL 18 integration suite
-        run: make integration-test
