@@ -11,7 +11,7 @@ ghcr.io/tinitasker/migrations-runner@sha256:<digest>
 
 This folder must be initialized as its own Git repository and pushed to the
 `tinitasker/migrations-runner` GitHub repository before its verification and
-release workflows can run. The surrounding `tinitasker` workspace is not a Git
+publishing workflows can run. The surrounding `tinitasker` workspace is not a Git
 repository and does not publish this project implicitly.
 
 Create the empty organization repository first, then initialize and publish
@@ -25,15 +25,63 @@ git remote add origin git@github.com:tinitasker/migrations-runner.git
 git push --set-upstream origin main
 ```
 
-Do not create a GitHub Release until `main` exists remotely and the repository
-workflow has passed. Repository creation, initialization, and the first push
-are deliberate one-time operator actions; Terraform does not perform them.
+Do not publish the runner until `main` exists remotely and the verification
+workflow has passed. Repository creation, initialization, and the first push are
+deliberate one-time operator actions; Terraform does not perform them.
 
 GitHub-hosted workflow jobs use the image's `package-migrations` command to
 create a migration bundle, then upload that bundle as a GitHub Actions
 artifact. The dedicated DigitalOcean self-hosted runner downloads the artifact
 and mounts it into the same image at `/migrations:ro` for execution. Service
 repositories therefore need no migration packaging scripts of their own.
+
+## Shared composite action
+
+The shared `tinitasker/actions/migrations/run` composite action owns the
+self-hosted half of the handoff: it creates a private temporary directory,
+downloads one named artifact from the current workflow run, verifies its
+metadata, pulls the digest-pinned image, executes it with rootless Podman, and
+removes temporary files in an `always` cleanup step. The image performs the
+bundle checksum and path validation at execution time.
+
+The calling job, not the action, chooses the runner. Keep the `migrate` job on
+the restricted database runner group and make it depend on the job that uploads
+the migration artifact. Do not check out service source code in that job.
+
+```yaml
+migrate:
+  needs: prepare-migrations
+  runs-on:
+    group: staging-db-migrations
+    labels: tinitasker-staging-db
+  environment:
+    name: staging
+  permissions:
+    actions: read
+  steps:
+    - uses: tinitasker/actions/migrations/run@<full-commit-sha>
+      with:
+        artifact-name: migrations-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        runner-image: ${{ needs.validate.outputs.migrations_runner_image }}
+        service: api
+        environment: staging
+        commit-sha: ${{ github.sha }}
+        expected-database: tinitasker_staging
+      env:
+        PGHOST: ${{ secrets.PGHOST }}
+        PGPORT: ${{ secrets.PGPORT }}
+        PGDATABASE: ${{ secrets.PGDATABASE }}
+        PGUSER: ${{ secrets.PGUSER }}
+        PGPASSWORD: ${{ secrets.PGPASSWORD }}
+```
+
+Pass database credentials as step environment variables, not action inputs.
+The action pulls the documented public runner image without registry credentials
+by default. If the package is deliberately private, set
+`registry-auth-required: true` and provide `GHCR_USERNAME` and `GHCR_TOKEN` as
+step environment variables. Pin the action reference to the exact reviewed
+commit after publishing it. A version tag is convenient for releases, but a
+full commit SHA is the immutable deployment reference.
 
 The GHCR package is expected to be public because it contains no database
 credentials, application code, or service migrations. This lets pull-request
@@ -245,13 +293,13 @@ package public, and reference the resolved digest in service workflows rather
 than relying on a mutable tag.
 
 The repository workflows verify pull requests and `main` pushes in the order
-validate, advisory SAST scan, image build, and portable tests. Publishing is
-triggered only by a stable GitHub Release named `vX.Y.Z`; listening to both tag
-pushes and releases would run the same publication twice. The release commit
-must belong to `main`, the version must increase monotonically, and existing
-immutable GHCR tags are rejected. A successful release publishes `vX.Y.Z`,
-`X.Y.Z`, `sha-<commit>`, and `latest`, then records the digest-qualified image
-reference in the workflow summary.
+validate, advisory SAST scan, image build, and portable tests. Publishing runs
+only when an operator manually starts **Publish migrations runner** and enters a
+stable `X.Y.Z` version. The selected revision must belong to `main`, the version
+must increase monotonically relative to published GHCR package tags, and
+existing immutable GHCR tags are rejected. A successful run publishes
+`vX.Y.Z`, `X.Y.Z`, `sha-<commit>`, and `latest`, then records the
+digest-qualified image reference in the workflow summary.
 
 After the first package version is published, perform this one-time GitHub
 organization action before enabling service workflows:
@@ -259,7 +307,7 @@ organization action before enabling service workflows:
 1. Open the `tinitasker/migrations-runner` package settings.
 2. Change package visibility to **Public**.
 3. Keep service workflows configured with the exact
-   `ghcr.io/tinitasker/migrations-runner@sha256:<digest>` printed by the release
+   `ghcr.io/tinitasker/migrations-runner@sha256:<digest>` printed by the publishing
    workflow.
 
 Only `latest` is mutable. Service workflows must never use it.

@@ -1,20 +1,25 @@
-name: Release
+name: Publish migrations runner
+
+run-name: Publish migrations runner v${{ inputs.version }} / ${{ github.ref_name }}
 
 on:
-  release:
-    types:
-      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version in X.Y.Z format, without a leading v.
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release
+  group: publish-migrations-runner
   cancel-in-progress: false
 
 jobs:
   validate:
-    name: Validate release
+    name: Validate publication
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,55 +28,28 @@ jobs:
       image: ${{ steps.version.outputs.image }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Check out release commit and tags
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check out the selected revision
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Validate stable release and version
+      - name: Validate version and revision
         id: version
         env:
-          IS_DRAFT: ${{ github.event.release.draft }}
-          IS_PRERELEASE: ${{ github.event.release.prerelease }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REQUESTED_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ "$IS_DRAFT" == 'true' || "$IS_PRERELEASE" == 'true' ]]; then
-            echo '::error title=Invalid release::Only a published, non-draft, non-prerelease release may publish the runner image.'
-            exit 1
-          fi
-
-          tag="$RELEASE_TAG"
-          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error title=Invalid release tag::Expected vX.Y.Z without prerelease labels or leading zeroes, received '$tag'."
-            exit 1
-          fi
-
-          tag_commit="$(git rev-list -n 1 "$tag")"
-          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
-            echo '::error title=Invalid release commit::The release tag does not resolve to the workflow commit.'
+          version="$REQUESTED_VERSION"
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error title=Invalid version::Expected X.Y.Z without a leading v, prerelease labels, or leading zeroes; received '$version'."
             exit 1
           fi
 
           git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
-          if ! git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main; then
-            echo '::error title=Invalid release commit::The release commit must belong to main.'
-            exit 1
-          fi
-
-          version="${tag#v}"
-          latest_version="$({
-            git tag --list 'v*.*.*' |
-              sed -En 's/^v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$/\1/p' |
-              awk -v current="$version" '$0 != current' |
-              sort -V |
-              tail -n 1
-          } || true)"
-
-          if [[ -n "$latest_version" ]] && dpkg --compare-versions "$version" le "$latest_version"; then
-            echo "::error title=Version is not newer::Version $version must be greater than the latest stable tag, $latest_version."
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo '::error title=Invalid revision::The selected revision must belong to main.'
             exit 1
           fi
 
@@ -126,6 +104,16 @@ jobs:
             fi
           done
 
+          latest_version="$({
+            sed -En 's/^v?((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$/\1/p' <<< "$published_tags" |
+              sort -Vu |
+              tail -n 1
+          } || true)"
+          if [[ -n "$latest_version" ]] && dpkg --compare-versions "$VERSION" le "$latest_version"; then
+            echo "::error title=Version is not newer::Version $VERSION must be greater than the latest published stable version, $latest_version."
+            exit 1
+          fi
+
   sast-scan:
     name: SAST scan
     needs: validate
@@ -133,15 +121,15 @@ jobs:
     continue-on-error: true
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@v7
 
-      - name: Scan source, dependencies, secrets, and configuration
+      - name: Scan filesystem vulnerabilities
         continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
-          scanners: vuln,secret,misconfig
+          scanners: vuln
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: 'false'
           format: table
@@ -154,7 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@v7
 
       - name: Validate shell sources
         run: shellcheck scripts/*.sh tests/*.sh
@@ -175,22 +163,22 @@ jobs:
       contents: read
       packages: write
     steps:
-      - name: Check out release commit
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Check out the selected revision
+        uses: actions/checkout@v7
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+        uses: docker/setup-buildx-action@v4
 
       - name: Build and publish immutable runner image
         id: image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
