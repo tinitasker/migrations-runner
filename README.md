@@ -9,25 +9,16 @@ ghcr.io/tinitasker/migrations-runner@sha256:<digest>
 
 ## Repository bootstrap
 
-This folder must be initialized as its own Git repository and pushed to the
-`tinitasker/migrations-runner` GitHub repository before its verification and
-publishing workflows can run. The surrounding `tinitasker` workspace is not a Git
-repository and does not publish this project implicitly.
+This folder is its own Git repository; the surrounding `tinitasker` workspace
+does not publish it implicitly. The existing `tinitasker/migrations-runner`
+repository is already initialized.
 
-Create the empty organization repository first, then initialize and publish
-this folder from its root:
-
-```sh
-git init
-git branch -M main
-git remote add origin git@github.com:tinitasker/migrations-runner.git
-# Review, add, and commit the project files before publishing them.
-git push --set-upstream origin main
-```
-
-Do not publish the runner until `main` exists remotely and the verification
-workflow has passed. Repository creation, initialization, and the first push are
-deliberate one-time operator actions; Terraform does not perform them.
+For a new empty organization repository, create a seed default `main` branch
+during repository provisioning (for example, by creating it with an initial
+README). Apply the organization `main` ruleset immediately. Then use the
+standard [`feature/<short-meaningful-description>` draft-PR flow](https://github.com/tinitasker/.github/blob/main/docs/development-flow.md)
+for every code or configuration change. Do not push later work directly to
+`main`.
 
 GitHub-hosted workflow jobs use the image's `package-migrations` command to
 create a migration bundle, then upload that bundle as a GitHub Actions
