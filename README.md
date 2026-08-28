@@ -1,10 +1,42 @@
-# TiniTasker migrations runner
+# TiniTasker Migrations Runner
 
-This project builds the universal PostgreSQL 18 migration image used to both
-package and execute service-owned migrations:
+This repository builds the universal PostgreSQL 18 migration image that
+packages and executes service-owned database migrations:
 
 ```text
 ghcr.io/tinitasker/migrations-runner@sha256:<digest>
+```
+
+Read the [organization engineering handbook](https://github.com/tinitasker/.github/blob/main/docs/README.md)
+for the platform architecture and required development flow.
+
+## Purpose
+
+The image provides one validated migration-bundle format and one safe
+execution path for the API, Identity, Messaging, and Storage services. Shared
+GitHub Actions use it during delivery, but service migrations continue to live
+in each owning repository's `db/` directory.
+
+## Business and security boundaries
+
+This repository owns migration packaging and execution mechanics, not product
+schema meaning or business rules. Preserve the service/schema allowlist,
+checksum verification, unprivileged container behavior, and immutable
+digest-pinning contract. The runner image must not contain application source,
+service migrations, or database credentials.
+
+## Technology
+
+- PostgreSQL 18 client tooling in a container image published to GHCR.
+- Portable shell packaging and validation scripts.
+- Docker or Podman for local builds and disposable integration tests.
+
+## Local development
+
+```sh
+make test
+make integration-test
+make build
 ```
 
 ## Repository bootstrap
@@ -155,12 +187,12 @@ COMMIT_SHA=0123456789abcdef0123456789abcdef01234567
 
 The supported service/schema pairs are:
 
-| Service | Schema |
-| --- | --- |
-| `api` | `public` |
-| `identity` | `identity` |
+| Service     | Schema      |
+|-------------|-------------|
+| `api`       | `public`    |
+| `identity`  | `identity`  |
 | `messaging` | `messaging` |
-| `storage` | `storage` |
+| `storage`   | `storage`   |
 
 Bundle metadata must match the job environment. This prevents a valid artifact
 for one service, environment, or commit from being used accidentally by
