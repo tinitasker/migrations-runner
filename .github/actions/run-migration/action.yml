@@ -1,0 +1,80 @@
+name: Run PostgreSQL migrations
+description: Download, verify, and execute a service migration artifact on a trusted self-hosted runner.
+
+inputs:
+  artifact-name:
+    description: Name of the migration artifact uploaded by an earlier job in this workflow run.
+    required: true
+  runner-image:
+    description: Digest-pinned ghcr.io/tinitasker/migrations-runner image.
+    required: true
+  service:
+    description: Service that owns the migrations (api, identity, messaging, or storage).
+    required: true
+  environment:
+    description: Deployment environment (staging or production).
+    required: true
+  commit-sha:
+    description: Lowercase 40-character commit SHA represented by the migration artifact.
+    required: true
+  expected-database:
+    description: Database name this deployment is allowed to migrate.
+    required: true
+  registry-auth-required:
+    description: Whether the runner image must be pulled with GHCR_USERNAME and GHCR_TOKEN.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Create migration artifact directory
+      id: artifact
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        temp_parent="$(cd -- "$RUNNER_TEMP" && pwd -P)"
+        artifact_directory="$(mktemp -d "$temp_parent/tinitasker-migration-artifact.XXXXXXXX")"
+        chmod 700 "$artifact_directory"
+        printf 'directory=%s\n' "$artifact_directory" >> "$GITHUB_OUTPUT"
+
+    - name: Download migration artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.artifact.outputs.directory }}
+
+    - name: Verify and execute migration artifact
+      shell: bash
+      env:
+        MIGRATION_ARTIFACT_DIRECTORY: ${{ steps.artifact.outputs.directory }}
+        MIGRATIONS_RUNNER_IMAGE: ${{ inputs.runner-image }}
+        MIGRATION_SERVICE: ${{ inputs.service }}
+        MIGRATION_ENVIRONMENT: ${{ inputs.environment }}
+        MIGRATION_COMMIT_SHA: ${{ inputs.commit-sha }}
+        MIGRATION_EXPECTED_DATABASE: ${{ inputs.expected-database }}
+        MIGRATION_REGISTRY_AUTH_REQUIRED: ${{ inputs.registry-auth-required }}
+      run: bash "$GITHUB_ACTION_PATH/run-migration.sh"
+
+    - name: Clean up migration artifact
+      if: ${{ always() }}
+      shell: bash
+      env:
+        MIGRATION_ARTIFACT_DIRECTORY: ${{ steps.artifact.outputs.directory }}
+      run: |
+        set -euo pipefail
+
+        [ -n "${MIGRATION_ARTIFACT_DIRECTORY:-}" ] || exit 0
+        temp_parent="$(cd -- "$RUNNER_TEMP" && pwd -P)"
+        case "$MIGRATION_ARTIFACT_DIRECTORY" in
+          "$temp_parent"/tinitasker-migration-artifact.*) ;;
+          *)
+            echo '::error title=Unsafe cleanup path::Refusing to remove an unexpected migration artifact directory.'
+            exit 1
+            ;;
+        esac
+
+        if [ -d "$MIGRATION_ARTIFACT_DIRECTORY" ] || [ -L "$MIGRATION_ARTIFACT_DIRECTORY" ]; then
+          find "$MIGRATION_ARTIFACT_DIRECTORY" -xdev -depth -delete
+        fi
