@@ -82,7 +82,7 @@ migrate:
   permissions:
     actions: read
   steps:
-    - uses: tinitasker/actions/migrations/run@<full-commit-sha>
+    - uses: tinitasker/actions/migrations/run@main
       with:
         artifact-name: migrations-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         runner-image: ${{ needs.validate.outputs.migrations_runner_image }}
@@ -102,9 +102,8 @@ Pass database credentials as step environment variables, not action inputs.
 The action pulls the documented public runner image without registry credentials
 by default. If the package is deliberately private, set
 `registry-auth-required: true` and provide `GHCR_USERNAME` and `GHCR_TOKEN` as
-step environment variables. Pin the action reference to the exact reviewed
-commit after publishing it. A version tag is convenient for releases, but a
-full commit SHA is the immutable deployment reference.
+step environment variables. Reference the shared action from `@main`; consumers
+automatically receive its latest reviewed implementation.
 
 The GHCR package is expected to be public because it contains no database
 credentials, application code, or service migrations. This lets pull-request
