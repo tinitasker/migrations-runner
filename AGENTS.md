@@ -1,6 +1,6 @@
 # TiniTasker Migrations Runner — Agent Instructions
 
-Read the [organization engineering handbook](https://github.com/tinitasker/.github/blob/main/docs/README.md) first. It contains the shared workflow; this file is specific to the migration image.
+Read the [organization engineering handbook](https://github.com/tinitasker/docs/blob/main/docs/README.md) first. It contains the shared workflow; this file is specific to the migration image.
 
 ## Local scope
 
