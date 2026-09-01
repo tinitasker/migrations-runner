@@ -7,7 +7,7 @@ packages and executes service-owned database migrations:
 ghcr.io/tinitasker/migrations-runner@sha256:<digest>
 ```
 
-Read the [organization engineering handbook](https://github.com/tinitasker/.github/blob/main/docs/README.md)
+Read the [organization engineering handbook](https://github.com/tinitasker/docs/blob/main/docs/README.md)
 for the platform architecture and required development flow.
 
 ## Purpose
@@ -48,7 +48,7 @@ repository is already initialized.
 For a new empty organization repository, create a seed default `main` branch
 during repository provisioning (for example, by creating it with an initial
 README). Apply the organization `main` ruleset immediately. Then use the
-standard [`feature/<short-meaningful-description>` draft-PR flow](https://github.com/tinitasker/.github/blob/main/docs/development-flow.md)
+standard [`feature/<short-meaningful-description>` draft-PR flow](https://github.com/tinitasker/docs/blob/main/docs/development-flow.md)
 for every code or configuration change. Do not push later work directly to
 `main`.
 
